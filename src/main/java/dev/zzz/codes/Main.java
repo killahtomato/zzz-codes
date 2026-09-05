@@ -46,8 +46,8 @@ public class Main {
     private record PageResult(String url, List<Extractor.Hit> hits) {
     }
 
-    private record Aggregated(String code, int sources, int score, String snippet, String label,
-                              Set<String> sourceHosts) {
+    private record Aggregated(String code, int sources, int score, String snippet, String reward,
+                              String label, Set<String> sourceHosts) {
     }
 
     public static void main(String[] args) throws Exception {
@@ -82,6 +82,7 @@ public class Main {
     }
 
     private static ResultTable scrape(List<String> pages) throws InterruptedException {
+        ItemList items = new ItemList(true);
         ExecutorService pool = Executors.newFixedThreadPool(8);
         List<Future<PageResult>> futures = new ArrayList<>();
         for (String page : pages) {
@@ -91,7 +92,7 @@ public class Main {
                     return null;
                 }
                 String text = HtmlText.toText(html);
-                return new PageResult(page, Extractor.extract(html, text));
+                return new PageResult(page, Extractor.extract(html, text, items));
             }));
         }
         pool.shutdown();
@@ -99,6 +100,7 @@ public class Main {
         Map<String, Set<String>> sources = new LinkedHashMap<>();
         Map<String, Integer> score = new HashMap<>();
         Map<String, String> snippet = new HashMap<>();
+        Map<String, String> rewards = new HashMap<>();
         Map<String, int[]> votes = new HashMap<>();
 
         int fetched = 0;
@@ -119,6 +121,9 @@ public class Main {
                 sources.computeIfAbsent(code, k -> new LinkedHashSet<>()).add(host);
                 score.merge(code, hit.score(), Integer::sum);
                 snippet.merge(code, hit.context(), (a, b) -> prefer(a, b));
+                if (hit.reward() != null && !hit.reward().isBlank()) {
+                    rewards.merge(code, hit.reward(), Rewards::select);
+                }
                 int[] v = votes.computeIfAbsent(code, k -> new int[2]);
                 if (Extractor.expiredSignal(hit)) {
                     v[0]++;
@@ -143,7 +148,7 @@ public class Main {
                 label = "";
             }
             list.add(new Aggregated(code, e.getValue().size(), score.get(code), snippet.get(code),
-                    label, e.getValue()));
+                    rewards.get(code), label, e.getValue()));
         }
         list.sort(Comparator.comparingInt(Aggregated::sources).reversed()
                 .thenComparing(Comparator.comparingInt(Aggregated::score).reversed())
@@ -187,8 +192,12 @@ public class Main {
         System.out.println("### " + heading);
         System.out.println();
         for (Aggregated a : codes) {
+            String shown = Rewards.display(a.reward(), a.snippet());
+            if (shown == null) {
+                shown = "(no reward info extracted)";
+            }
             System.out.printf("%-17s %d source%s%n", a.code(), a.sources(), a.sources() == 1 ? "" : "s");
-            System.out.println("  " + a.snippet());
+            System.out.println("  " + shown);
             System.out.println("  " + REDEEM_URL + a.code());
             System.out.println("  from: " + String.join(", ", a.sourceHosts()));
             System.out.println();

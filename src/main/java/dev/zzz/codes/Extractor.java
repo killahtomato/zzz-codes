@@ -10,7 +10,7 @@ import java.util.regex.Pattern;
 
 final class Extractor {
 
-    record Hit(String code, String context, int score, boolean urlSourced) {
+    record Hit(String code, String context, int score, String reward, boolean urlSourced) {
     }
 
     private static final Pattern CODE = Pattern.compile("\\b[A-Z0-9]{6,16}\\b");
@@ -80,9 +80,14 @@ final class Extractor {
     private Extractor() {
     }
 
-    static List<Hit> extract(String rawHtml, String text) {
+    static List<Hit> extract(String rawHtml, String text, ItemList items) {
         Set<String> seen = new HashSet<>();
         List<Hit> out = new ArrayList<>();
+        String[] lines = text.split("\\n", -1);
+        int[] offs = new int[lines.length + 1];
+        for (int i = 0; i < lines.length; i++) {
+            offs[i + 1] = offs[i] + lines[i].length() + 1;
+        }
         Matcher tm = CODE.matcher(text);
         while (tm.find()) {
             String tok = tm.group();
@@ -100,8 +105,9 @@ final class Extractor {
             if (kw == 0 || (kw == 1 && !strong(tok, context))) {
                 continue;
             }
+            String reward = rewardAt(lines, offs, tm.start(), items);
             if (seen.add(tok)) {
-                out.add(new Hit(tok, snippet(context), 2 + kw, false));
+                out.add(new Hit(tok, snippet(context), 2 + kw, reward, false));
             }
         }
         Matcher um = CODE_PARAM.matcher(rawHtml);
@@ -112,14 +118,32 @@ final class Extractor {
             }
             if (seen.add(code)) {
                 String ctx = "found in a link on the page (#" + um.group(1) + "=" + code + ")";
+                String reward = null;
                 int ti = text.toUpperCase(Locale.ROOT).indexOf(code);
                 if (ti >= 0) {
                     ctx = window(text, ti, ti + code.length());
+                    reward = rewardAt(lines, offs, ti, items);
                 }
-                out.add(new Hit(code, snippet(ctx), 10, true));
+                out.add(new Hit(code, snippet(ctx), 10, reward, true));
             }
         }
         return out;
+    }
+
+    private static String rewardAt(String[] lines, int[] offs, int pos, ItemList items) {
+        int li = 0;
+        for (int i = 0; i < lines.length; i++) {
+            if (pos < offs[i + 1]) {
+                li = i;
+                break;
+            }
+        }
+        String line = lines[li];
+        String reward = Rewards.extract(line, pos - offs[li], items);
+        if (reward == null && li + 1 < lines.length) {
+            reward = Rewards.extract(line + " " + lines[li + 1], pos - offs[li], items);
+        }
+        return reward;
     }
 
     private static boolean skippable(String tok) {
