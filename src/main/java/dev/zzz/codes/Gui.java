@@ -1,35 +1,51 @@
 package dev.zzz.codes;
 
+import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Cursor;
 import java.awt.Desktop;
-import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.awt.Font;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.Image;
+import java.awt.RenderingHints;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.awt.image.BufferedImage;
+import java.io.InputStream;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 
-import javax.swing.JEditorPane;
+import javax.imageio.ImageIO;
+import javax.swing.BorderFactory;
+import javax.swing.Box;
+import javax.swing.BoxLayout;
+import javax.swing.ImageIcon;
+import javax.swing.JButton;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
+import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
-import javax.swing.event.HyperlinkEvent;
-import javax.swing.event.HyperlinkListener;
+import javax.swing.border.EmptyBorder;
 
 final class Gui {
 
     private static final String REDEEM_URL = "https://zenless.hoyoverse.com/redemption?code=";
-    private static final String ACCENT = "#5b8cff";
-    private static final Color BG = new Color(0x14161c);
-    private static final Color CARD = new Color(0x1d212b);
+    private static final Color CARD_FILL = new Color(0xd91d212b, true);
+    private static final Color CARD_EDGE = new Color(0x2a2f3a);
     private static final Color TEXT = new Color(0xdfe3ea);
-    private static final Color MUTED = new Color(0x99a2b3);
+    private static final Color MUTED = new Color(0xaab3c4);
+    private static final Color ACCENT = new Color(0x6ea3ff);
     private static final Color GREEN = new Color(0x4ade80);
     private static final Color AMBER = new Color(0xfbbf24);
     private static final Color RED = new Color(0xf87171);
+    private static final Color BG = new Color(0x10121a);
 
     private Gui() {
     }
@@ -38,141 +54,293 @@ final class Gui {
         SwingUtilities.invokeLater(() -> {
             JFrame frame = new JFrame("ZZZ Redemption Codes");
             frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-            frame.setSize(940, 760);
-            frame.setMinimumSize(new Dimension(640, 480));
+            frame.setSize(960, 780);
             frame.setLocationRelativeTo(null);
-            frame.getContentPane().setBackground(BG);
 
-            JLabel status = new JLabel("Scraping code tracker pages\u2026", SwingConstants.CENTER);
-            status.setForeground(MUTED);
-            status.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 16));
-            frame.getContentPane().add(status);
+            BgPanel bg = new BgPanel();
+            bg.setLayout(new BorderLayout());
+            frame.setContentPane(bg);
+
+            JPanel north = new JPanel();
+            north.setOpaque(false);
+            north.setLayout(new BoxLayout(north, BoxLayout.Y_AXIS));
+
+            JLabel header = headerImage();
+            if (header != null) {
+                north.add(header);
+            }
+
+            JPanel toolbar = new JPanel(new BorderLayout());
+            toolbar.setOpaque(false);
+            toolbar.setBorder(new EmptyBorder(8, 16, 8, 16));
+            JLabel status = new JLabel("Scraping code tracker pages\u2026");
+            status.setForeground(TEXT);
+            status.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 13));
+            toolbar.add(status, BorderLayout.CENTER);
+            JButton rescan = new JButton("Scan again");
+            rescan.setFocusPainted(false);
+            rescan.setBackground(new Color(0x3a5b8cff, true));
+            rescan.setForeground(Color.WHITE);
+            rescan.setOpaque(true);
+            toolbar.add(rescan, BorderLayout.EAST);
+            north.add(toolbar);
+            bg.add(north, BorderLayout.NORTH);
+
+            final JPanel results = new JPanel(new BorderLayout());
+            results.setOpaque(false);
+            bg.add(results, BorderLayout.CENTER);
+
+            Runnable startScan = () -> {
+                setWaiting(results, "Gathering intel\u2026");
+                new RescanJob(results, status).execute();
+            };
+
+            rescan.addActionListener(e -> startScan.run());
 
             frame.setVisible(true);
-            new ScrapeWorker(frame, status).execute();
+            startScan.run();
         });
     }
 
-    private static final class ScrapeWorker extends SwingWorker<List<String>, Void> {
+    private static JLabel headerImage() {
+        BufferedImage raw = load("/zzz/header.png");
+        if (raw == null) {
+            return null;
+        }
+        int w = 960;
+        int h = raw.getHeight() * w / Math.max(1, raw.getWidth());
+        Image img = raw.getScaledInstance(w, h, Image.SCALE_SMOOTH);
+        JLabel head = new JLabel(new ImageIcon(img), SwingConstants.CENTER);
+        head.setOpaque(false);
+        return head;
+    }
 
-        private final JFrame frame;
+    private static void setWaiting(JPanel results, String text) {
+        results.removeAll();
+        JLabel wait = new JLabel(text, SwingConstants.CENTER);
+        wait.setForeground(TEXT);
+        wait.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 18));
+        results.add(wait, BorderLayout.CENTER);
+        results.revalidate();
+        results.repaint();
+    }
+
+    private static final class RescanJob extends SwingWorker<Void, Void> {
+
+        private final JPanel results;
         private final JLabel status;
 
-        ScrapeWorker(JFrame frame, JLabel status) {
-            this.frame = frame;
+        RescanJob(JPanel results, JLabel status) {
+            this.results = results;
             this.status = status;
         }
 
         @Override
-        protected List<String> doInBackground() throws Exception {
+        protected Void doInBackground() throws Exception {
             Scanner.ResultTable table = Scanner.scan();
-            return render(table);
+            cards(results, table);
+            return null;
         }
 
         @Override
         protected void done() {
             try {
-                List<String> html = get();
-                JEditorPane pane = new JEditorPane();
-                pane.setContentType("text/html");
-                pane.setEditable(false);
-                pane.setOpaque(true);
-                pane.setBackground(BG);
-                pane.setText("<html><body style='font-family:SansSerif;color:#dfe3ea;'>" + String.join("", html) + "</body></html>");
-                pane.setCaretPosition(0);
-                pane.addHyperlinkListener(new HyperlinkListener() {
-                    @Override
-                    public void hyperlinkUpdate(HyperlinkEvent e) {
-                        if (e.getEventType() == HyperlinkEvent.EventType.ACTIVATED) {
-                            open(e.getURL().toExternalForm());
-                        }
-                    }
-                });
-                frame.getContentPane().removeAll();
-                frame.getContentPane().add(new JScrollPane(pane), java.awt.BorderLayout.CENTER);
-                frame.getContentPane().setBackground(BG);
-                frame.revalidate();
-                frame.repaint();
+                get();
+                status.setText("");
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             } catch (ExecutionException e) {
                 String msg = e.getCause() == null ? e.toString()
                         : (e.getCause().getMessage() == null ? e.getCause().toString() : e.getCause().getMessage());
+                status.setText("scan failed");
+                results.removeAll();
                 JLabel label = new JLabel("<html><div style='text-align:center;'>Scan failed:<br>"
                         + esc(msg) + "</div></html>", SwingConstants.CENTER);
                 label.setForeground(RED);
-                frame.getContentPane().removeAll();
-                frame.getContentPane().add(label, java.awt.BorderLayout.CENTER);
-                frame.setBackground(BG);
-                frame.revalidate();
-                frame.repaint();
+                results.add(label, BorderLayout.CENTER);
+                results.revalidate();
+                results.repaint();
             }
         }
     }
 
-    private static List<String> render(Scanner.ResultTable table) {
-        List<String> out = new ArrayList<>();
-        out.add(group("ACTIVE", GREEN, table.codes(), "active?"));
-        out.add(group("UNVERIFIED", AMBER, table.codes(), ""));
-        out.add(group("POSSIBLY EXPIRED", RED, table.codes(), "mixed?", "expired?"));
-        if (table.codes().isEmpty()) {
-            out.add("<p style='color:#99a2b3;margin-top:24px;'>No codes found.</p>");
+    private static void cards(JPanel results, Scanner.ResultTable table) {
+        List<Scanner.Aggregated> active = groupOf(table, "active?");
+        List<Scanner.Aggregated> unverified = groupOf(table, "");
+        List<Scanner.Aggregated> expired = groupOf(table, "mixed?", "expired?");
+
+        JPanel list = new JPanel();
+        list.setOpaque(false);
+        list.setLayout(new BoxLayout(list, BoxLayout.Y_AXIS));
+        list.setBorder(new EmptyBorder(4, 16, 14, 16));
+
+        addHeader(list, "ACTIVE", GREEN);
+        for (Scanner.Aggregated a : active) {
+            addCard(list, a);
         }
-        out.add("<p style='color:#99a2b3;font-size:12px;'>scraped "
-                + table.pagesFetched() + " pages \u00b7 redeem in-game: Menu \u203a More \u203a Redemption Code</p>");
-        return out;
+        addHeader(list, "UNVERIFIED", AMBER);
+        for (Scanner.Aggregated a : unverified) {
+            addCard(list, a);
+        }
+        addHeader(list, "POSSIBLY EXPIRED", RED);
+        for (Scanner.Aggregated a : expired) {
+            addCard(list, a);
+        }
+
+        JScrollPane scroll = new JScrollPane(list,
+                JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+                JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        scroll.getViewport().setOpaque(false);
+        scroll.setOpaque(false);
+        scroll.setBorder(null);
+
+        SwingUtilities.invokeLater(() -> {
+            results.removeAll();
+            results.add(scroll, BorderLayout.CENTER);
+            results.revalidate();
+            results.repaint();
+        });
     }
 
-    private static String group(String title, Color color, List<Scanner.Aggregated> all, String... labels) {
-        List<Scanner.Aggregated> wants = new ArrayList<>();
-        for (Scanner.Aggregated a : all) {
+    private static List<Scanner.Aggregated> groupOf(Scanner.ResultTable table, String... labels) {
+        List<Scanner.Aggregated> out = new ArrayList<>();
+        for (Scanner.Aggregated a : table.codes()) {
             for (String l : labels) {
                 if (a.label().equals(l)) {
-                    wants.add(a);
+                    out.add(a);
                 }
             }
         }
-        if (wants.isEmpty()) {
-            return "";
-        }
-        StringBuilder sb = new StringBuilder("<h2 style='color:");
-        sb.append(css(color)).append(";margin:18px 2px 6px 2px;font-size:16px;'>").append(title).append("</h2>");
-        for (Scanner.Aggregated a : wants) {
-            sb.append(card(a));
-        }
-        return sb.toString();
+        return out;
     }
 
-    private static String card(Scanner.Aggregated a) {
-        StringBuilder sb = new StringBuilder("<table width='100%' cellpadding='0' cellspacing='0' "
-                + "style='background:#1d212b;border:1px solid #2a2f3a;border-radius:8px;margin:6px 0;'><tr><td style='padding:10px 12px;'>");
-        String dot = dotColor(a.label());
-        sb.append("<b style='font-family:Monospaced;color:").append(dot).append(";font-size:14px;'>")
-                .append(esc(a.code())).append("</b>");
-        sb.append(" <span style='color:#99a2b3;font-size:12px;'>&mdash; ").append(a.sources())
-                .append(a.sources() == 1 ? " source" : " sources")
-                .append(a.label().isEmpty() ? "" : " \u00b7 " + esc(a.label()))
-                .append("</span><br>");
-        String reward = Rewards.display(a.reward(), a.snippet());
-        sb.append("<span style='color:#dfe3ea;font-size:13px;'>")
-                .append(reward == null ? "(no reward info extracted)" : esc(reward))
-                .append("</span>");
-        sb.append("<div style='font-size:11px;color:#99a2b3;margin-top:6px;'>")
-                .append("<a href='" + REDEEM_URL + esc(a.code()) + "' style='color:" + ACCENT + ";'>Redeem</a>")
-                .append(" \u00b7 from: ").append(esc(String.join(", ", a.sourceHosts())))
-                .append("</div>");
-        sb.append("</td></tr></table>");
-        return sb.toString();
+    private static void addHeader(JPanel list, String title, Color color) {
+        boolean empty = list.getComponentCount() == 0;
+        list.add(Box.createVerticalStrut(empty ? 2 : 14));
+        JLabel h = new JLabel(title);
+        h.setForeground(color);
+        h.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 16));
+        h.setBorder(new EmptyBorder(0, 2, 4, 0));
+        list.add(h);
     }
 
-    private static String dotColor(String label) {
+    private static void addCard(JPanel list, Scanner.Aggregated a) {
+        CodeCard card = new CodeCard(a);
+        card.setAlignmentX(0f);
+        card.setBorder(new EmptyBorder(8, 12, 10, 12));
+        card.setMaximumSize(new java.awt.Dimension(card.getMaximumSize().width,
+                card.getPreferredSize().height));
+        list.add(Box.createVerticalStrut(6));
+        list.add(card);
+    }
+
+    private static final class CodeCard extends JPanel {
+
+        CodeCard(Scanner.Aggregated a) {
+            setOpaque(false);
+            setLayout(new BorderLayout());
+
+            JPanel top = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+            top.setOpaque(false);
+
+            JLabel code = new JLabel(a.code());
+            code.setForeground(statusColor(a.label()));
+            code.setFont(new Font(Font.MONOSPACED, Font.BOLD, 14));
+            top.add(code);
+
+            StringBuilder meta = new StringBuilder();
+            meta.append(a.sources()).append(a.sources() == 1 ? " source" : " sources");
+            if (!a.label().isEmpty()) {
+                meta.append("  \u00b7  ").append(a.label());
+            }
+            JLabel metaLabel = new JLabel(meta.toString());
+            metaLabel.setForeground(MUTED);
+            metaLabel.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
+            metaLabel.setBorder(new EmptyBorder(1, 8, 0, 0));
+            top.add(metaLabel);
+            add(top, BorderLayout.NORTH);
+
+            String reward = Rewards.display(a.reward(), a.snippet());
+            JLabel rewardLabel = new JLabel(reward == null ? "(no reward info extracted)" : "<html>" + esc(reward) + "</html>");
+            rewardLabel.setForeground(TEXT);
+            rewardLabel.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 13));
+            rewardLabel.setBorder(new EmptyBorder(2, 0, 4, 0));
+            add(rewardLabel, BorderLayout.CENTER);
+
+            JPanel bottom = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+            bottom.setOpaque(false);
+            JLabel link = new JLabel("<html><a href='" + REDEEM_URL + esc(a.code()) + "' style='color:" + css(ACCENT) + ";'>Redeem</a></html>");
+            link.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            link.addMouseListener(new MouseAdapter() {
+                @Override
+                public void mouseClicked(MouseEvent e) {
+                    open(REDEEM_URL + a.code());
+                }
+            });
+            bottom.add(link);
+            JLabel from = new JLabel(" \u00b7 from: " + String.join(", ", a.sourceHosts()));
+            from.setForeground(MUTED);
+            from.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
+            bottom.add(from);
+            add(bottom, BorderLayout.SOUTH);
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g2.setColor(CARD_FILL);
+            g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 14, 14);
+            g2.setColor(CARD_EDGE);
+            g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 14, 14);
+            g2.dispose();
+            super.paintComponent(g);
+        }
+    }
+
+    private static Color statusColor(String label) {
         if (label.equals("active?")) {
-            return css(GREEN);
+            return GREEN;
         }
         if (label.equals("expired?") || label.equals("mixed?")) {
-            return css(RED);
+            return RED;
         }
-        return css(AMBER);
+        return AMBER;
+    }
+
+    private static final class BgPanel extends JPanel {
+        private final BufferedImage bg;
+
+        BgPanel() {
+            setOpaque(true);
+            setBackground(BG);
+            bg = load("/zzz/bg.png");
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+            Graphics2D g2 = (Graphics2D) g.create();
+            if (bg != null) {
+                g2.drawImage(bg, 0, 0, getWidth(), getHeight(), null);
+                g2.setColor(new Color(0f, 0f, 0f, 0.40f));
+                g2.fillRect(0, 0, getWidth(), getHeight());
+            }
+            g2.dispose();
+        }
+    }
+
+    private static BufferedImage load(String path) {
+        try (InputStream in = Gui.class.getResourceAsStream(path)) {
+            if (in == null) {
+                System.err.println("warn: missing embedded image " + path);
+                return null;
+            }
+            return ImageIO.read(in);
+        } catch (Exception e) {
+            System.err.println("warn: could not load " + path + " (" + e + ")");
+            return null;
+        }
     }
 
     private static String css(Color c) {
