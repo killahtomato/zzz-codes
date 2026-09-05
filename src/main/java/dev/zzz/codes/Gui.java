@@ -73,11 +73,11 @@ final class Gui {
             JPanel toolbar = new JPanel(new BorderLayout());
             toolbar.setOpaque(false);
             toolbar.setBorder(new EmptyBorder(8, 16, 8, 16));
-            JLabel status = new JLabel("Scraping code tracker pages\u2026");
+            JLabel status = new JLabel("Alright, let\u2019s hunt down some fresh codes\u2026");
             status.setForeground(TEXT);
             status.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 13));
             toolbar.add(status, BorderLayout.CENTER);
-            JButton rescan = new JButton("Scan again");
+            JButton rescan = new JButton("Wanna see me do it again?");
             rescan.setFocusPainted(false);
             rescan.setBackground(new Color(0x3a5b8cff, true));
             rescan.setForeground(Color.WHITE);
@@ -91,7 +91,7 @@ final class Gui {
             bg.add(results, BorderLayout.CENTER);
 
             Runnable startScan = () -> {
-                setWaiting(results, "Gathering intel\u2026");
+                setWaiting(results, "Hang tight, sniffing around for new codes\u2026");
                 new RescanJob(results, status).execute();
             };
 
@@ -152,9 +152,9 @@ final class Gui {
             } catch (ExecutionException e) {
                 String msg = e.getCause() == null ? e.toString()
                         : (e.getCause().getMessage() == null ? e.getCause().toString() : e.getCause().getMessage());
-                status.setText("scan failed");
+                status.setText("silly us, that hiccuped");
                 results.removeAll();
-                JLabel label = new JLabel("<html><div style='text-align:center;'>Scan failed:<br>"
+                JLabel label = new JLabel("<html><div style='text-align:center;'>Oops, the hunt glitched:<br>"
                         + esc(msg) + "</div></html>", SwingConstants.CENTER);
                 label.setForeground(RED);
                 results.add(label, BorderLayout.CENTER);
@@ -174,15 +174,15 @@ final class Gui {
         list.setLayout(new BoxLayout(list, BoxLayout.Y_AXIS));
         list.setBorder(new EmptyBorder(4, 16, 14, 16));
 
-        addHeader(list, "ACTIVE", GREEN);
+        addHeader(list, "Fresh & ready to claim", GREEN);
         for (Scanner.Aggregated a : active) {
             addCard(list, a);
         }
-        addHeader(list, "UNVERIFIED", AMBER);
+        addHeader(list, "Might still work", AMBER);
         for (Scanner.Aggregated a : unverified) {
             addCard(list, a);
         }
-        addHeader(list, "POSSIBLY EXPIRED", RED);
+        addHeader(list, "Probably let go", RED);
         for (Scanner.Aggregated a : expired) {
             addCard(list, a);
         }
@@ -258,7 +258,7 @@ final class Gui {
             add(top, BorderLayout.NORTH);
 
             String reward = Rewards.display(a.reward(), a.snippet());
-            JLabel rewardLabel = new JLabel(reward == null ? "(no reward info extracted)" : "<html>" + esc(reward) + "</html>");
+            JLabel rewardLabel = new JLabel(reward == null ? "Didn\u2019t catch the rewards for this one" : "<html>" + esc(reward) + "</html>");
             rewardLabel.setForeground(TEXT);
             rewardLabel.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 13));
             rewardLabel.setBorder(new EmptyBorder(2, 0, 4, 0));
@@ -275,7 +275,7 @@ final class Gui {
                 }
             });
             bottom.add(link);
-            JLabel from = new JLabel(" \u00b7 from: " + String.join(", ", a.sourceHosts()));
+            JLabel from = new JLabel(" \u00b7 spotted on: " + String.join(", ", a.sourceHosts()));
             from.setForeground(MUTED);
             from.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
             bottom.add(from);
