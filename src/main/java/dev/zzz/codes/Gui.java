@@ -250,9 +250,6 @@ final class Gui {
 
             StringBuilder meta = new StringBuilder();
             meta.append(a.sources()).append(a.sources() == 1 ? " source" : " sources");
-            if (!a.label().isEmpty()) {
-                meta.append("  \u00b7  ").append(a.label());
-            }
             JLabel metaLabel = new JLabel(meta.toString());
             metaLabel.setForeground(MUTED);
             metaLabel.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
