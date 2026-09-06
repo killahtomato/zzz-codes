@@ -10,21 +10,31 @@ import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.Image;
 import java.awt.RenderingHints;
+import java.awt.Toolkit;
+import java.awt.datatransfer.StringSelection;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.image.BufferedImage;
+import java.io.File;
 import java.io.InputStream;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
 
 import javax.imageio.ImageIO;
-import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
+import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
@@ -32,6 +42,7 @@ import javax.swing.JScrollPane;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
+import javax.swing.Timer;
 import javax.swing.border.EmptyBorder;
 
 final class Gui {
@@ -40,6 +51,7 @@ final class Gui {
     private static final Color CARD_FILL = new Color(0xd91d212b, true);
     private static final Color CARD_EDGE = new Color(0x2a2f3a);
     private static final Color TEXT = new Color(0xdfe3ea);
+    private static final Color DONE = new Color(0x7a8596);
     private static final Color MUTED = new Color(0xaab3c4);
     private static final Color ACCENT = new Color(0x6ea3ff);
     private static final Color GREEN = new Color(0x4ade80);
@@ -47,19 +59,23 @@ final class Gui {
     private static final Color RED = new Color(0xf87171);
     private static final Color BG = new Color(0x10121a);
 
+    private static volatile Scanner.ResultTable LATEST;
+    private static JFrame FRAME;
+    private static JLabel STATUS;
+
     private Gui() {
     }
 
     static void launch(String[] args) {
         SwingUtilities.invokeLater(() -> {
-            JFrame frame = new JFrame("ZZZ Redemption Codes");
-            frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-            frame.setSize(960, 780);
-            frame.setLocationRelativeTo(null);
+            FRAME = new JFrame("ZZZ Redemption Codes");
+            FRAME.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+            FRAME.setSize(960, 780);
+            FRAME.setLocationRelativeTo(null);
 
             BgPanel bg = new BgPanel();
             bg.setLayout(new BorderLayout());
-            frame.setContentPane(bg);
+            FRAME.setContentPane(bg);
 
             JPanel north = new JPanel();
             north.setOpaque(false);
@@ -76,13 +92,20 @@ final class Gui {
             JLabel status = new JLabel("Alright, let\u2019s hunt down some fresh codes\u2026");
             status.setForeground(TEXT);
             status.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 13));
+            status.setHorizontalAlignment(SwingConstants.RIGHT);
+            STATUS = status;
             toolbar.add(status, BorderLayout.CENTER);
-            JButton rescan = new JButton("Wanna see me do it again?");
-            rescan.setFocusPainted(false);
-            rescan.setBackground(new Color(0x3a5b8cff, true));
-            rescan.setForeground(Color.WHITE);
-            rescan.setOpaque(true);
-            toolbar.add(rescan, BorderLayout.EAST);
+
+            Set<String> redeemed = Redeemed.load();
+
+            JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+            buttons.setOpaque(false);
+            JButton export = cozyButton("Export to .txt");
+            export.addActionListener(e -> exportTxt(redeemed));
+            buttons.add(export);
+            JButton rescan = cozyButton("Wanna see me do it again?");
+            buttons.add(rescan);
+            toolbar.add(buttons, BorderLayout.EAST);
             north.add(toolbar);
             bg.add(north, BorderLayout.NORTH);
 
@@ -92,14 +115,23 @@ final class Gui {
 
             Runnable startScan = () -> {
                 setWaiting(results, "Hang tight, sniffing around for new codes\u2026");
-                new RescanJob(results, status).execute();
+                new RescanJob(results, status, redeemed).execute();
             };
 
             rescan.addActionListener(e -> startScan.run());
 
-            frame.setVisible(true);
+            FRAME.setVisible(true);
             startScan.run();
         });
+    }
+
+    private static JButton cozyButton(String text) {
+        JButton b = new JButton(text);
+        b.setFocusPainted(false);
+        b.setBackground(new Color(0x3a5b8cff, true));
+        b.setForeground(Color.WHITE);
+        b.setOpaque(true);
+        return b;
     }
 
     private static JLabel headerImage() {
@@ -129,16 +161,19 @@ final class Gui {
 
         private final JPanel results;
         private final JLabel status;
+        private final Set<String> redeemed;
 
-        RescanJob(JPanel results, JLabel status) {
+        RescanJob(JPanel results, JLabel status, Set<String> redeemed) {
             this.results = results;
             this.status = status;
+            this.redeemed = redeemed;
         }
 
         @Override
         protected Void doInBackground() throws Exception {
             Scanner.ResultTable table = Scanner.scan();
-            cards(results, table);
+            LATEST = table;
+            cards(results, table, redeemed);
             return null;
         }
 
@@ -164,7 +199,7 @@ final class Gui {
         }
     }
 
-    private static void cards(JPanel results, Scanner.ResultTable table) {
+    private static void cards(JPanel results, Scanner.ResultTable table, Set<String> redeemed) {
         List<Scanner.Aggregated> active = groupOf(table, "active?");
         List<Scanner.Aggregated> unverified = groupOf(table, "");
         List<Scanner.Aggregated> expired = groupOf(table, "mixed?", "expired?");
@@ -176,15 +211,15 @@ final class Gui {
 
         addHeader(list, "Fresh & ready to claim", GREEN);
         for (Scanner.Aggregated a : active) {
-            addCard(list, a);
+            addCard(list, a, redeemed);
         }
         addHeader(list, "Might still work", AMBER);
         for (Scanner.Aggregated a : unverified) {
-            addCard(list, a);
+            addCard(list, a, redeemed);
         }
         addHeader(list, "Probably let go", RED);
         for (Scanner.Aggregated a : expired) {
-            addCard(list, a);
+            addCard(list, a, redeemed);
         }
 
         JScrollPane scroll = new JScrollPane(list,
@@ -214,6 +249,16 @@ final class Gui {
         return out;
     }
 
+    private static String groupTitle(String label) {
+        if (label.equals("active?")) {
+            return "FRESH & READY TO CLAIM";
+        }
+        if (label.equals("mixed?") || label.equals("expired?")) {
+            return "PROBABLY LET GO";
+        }
+        return "MIGHT STILL WORK";
+    }
+
     private static void addHeader(JPanel list, String title, Color color) {
         boolean empty = list.getComponentCount() == 0;
         list.add(Box.createVerticalStrut(empty ? 2 : 14));
@@ -224,8 +269,8 @@ final class Gui {
         list.add(h);
     }
 
-    private static void addCard(JPanel list, Scanner.Aggregated a) {
-        CodeCard card = new CodeCard(a);
+    private static void addCard(JPanel list, Scanner.Aggregated a, Set<String> redeemed) {
+        CodeCard card = new CodeCard(a, redeemed);
         card.setAlignmentX(0f);
         card.setBorder(new EmptyBorder(8, 12, 10, 12));
         card.setMaximumSize(new java.awt.Dimension(card.getMaximumSize().width,
@@ -236,15 +281,23 @@ final class Gui {
 
     private static final class CodeCard extends JPanel {
 
-        CodeCard(Scanner.Aggregated a) {
+        CodeCard(Scanner.Aggregated a, Set<String> redeemed) {
             setOpaque(false);
             setLayout(new BorderLayout());
 
             JPanel top = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
             top.setOpaque(false);
 
+            JCheckBox box = new JCheckBox("Redeemed");
+            box.setOpaque(false);
+            box.setSelected(redeemed.contains(a.code()));
+            box.setFocusPainted(false);
+            box.setForeground(MUTED);
+            box.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
+            box.setBorder(new EmptyBorder(0, 0, 0, 10));
+            top.add(box);
+
             JLabel code = new JLabel(a.code());
-            code.setForeground(statusColor(a.label()));
             code.setFont(new Font(Font.MONOSPACED, Font.BOLD, 14));
             top.add(code);
 
@@ -264,6 +317,19 @@ final class Gui {
             rewardLabel.setBorder(new EmptyBorder(2, 0, 4, 0));
             add(rewardLabel, BorderLayout.CENTER);
 
+            applyDone(box.isSelected(), code, rewardLabel, a.label());
+
+            box.addActionListener(e -> {
+                boolean done = box.isSelected();
+                if (done) {
+                    redeemed.add(a.code());
+                } else {
+                    redeemed.remove(a.code());
+                }
+                Redeemed.save(redeemed);
+                applyDone(done, code, rewardLabel, a.label());
+            });
+
             JPanel bottom = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
             bottom.setOpaque(false);
             JLabel link = new JLabel("<html><a href='" + REDEEM_URL + esc(a.code()) + "' style='color:" + css(ACCENT) + ";'>Redeem</a></html>");
@@ -275,11 +341,39 @@ final class Gui {
                 }
             });
             bottom.add(link);
+
+            JButton copy = cozyButton("Copy code");
+            copy.setMargin(new java.awt.Insets(1, 8, 1, 8));
+            bottom.add(Box.createHorizontalStrut(12));
+            copy.addActionListener(e -> {
+                Toolkit.getDefaultToolkit().getSystemClipboard()
+                        .setContents(new StringSelection(a.code()), null);
+                copy.setText("Copied!");
+                copy.setEnabled(false);
+                Timer timer = new Timer(1200, ev -> {
+                    copy.setText("Copy code");
+                    copy.setEnabled(true);
+                });
+                timer.setRepeats(false);
+                timer.start();
+            });
+            bottom.add(copy);
+
             JLabel from = new JLabel(" \u00b7 spotted on: " + String.join(", ", a.sourceHosts()));
             from.setForeground(MUTED);
             from.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
             bottom.add(from);
             add(bottom, BorderLayout.SOUTH);
+        }
+
+        private static void applyDone(boolean done, JLabel code, JLabel reward, String label) {
+            if (done) {
+                code.setForeground(DONE);
+                reward.setForeground(DONE);
+            } else {
+                code.setForeground(colorFor(label));
+                reward.setForeground(TEXT);
+            }
         }
 
         @Override
@@ -295,7 +389,7 @@ final class Gui {
         }
     }
 
-    private static Color statusColor(String label) {
+    private static Color colorFor(String label) {
         if (label.equals("active?")) {
             return GREEN;
         }
@@ -303,6 +397,84 @@ final class Gui {
             return RED;
         }
         return AMBER;
+    }
+
+    private static void exportTxt(Set<String> redeemed) {
+        Scanner.ResultTable table = LATEST;
+        if (table == null) {
+            statusText("Give me a sec, still hunting\u2026");
+            return;
+        }
+        JFileChooser fc = new JFileChooser();
+        fc.setDialogTitle("Where should I drop the code list?");
+        fc.setSelectedFile(new File("zzz-codes.txt"));
+        if (fc.showSaveDialog(FRAME) != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+        File target = fc.getSelectedFile();
+        try {
+            Files.write(target.toPath(), exportText(table, redeemed).getBytes(StandardCharsets.UTF_8));
+            statusText("Saved to " + target.getName() + " \u2728");
+        } catch (Exception e) {
+            statusText("couldn\u2019t write that file\u2026");
+            System.err.println("warn: export failed (" + e + ")");
+        }
+    }
+
+    private static String exportText(Scanner.ResultTable table, Set<String> redeemed) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("ZZZ Redemption Codes\n");
+        sb.append("exported ").append(LocalDateTime.now()
+                .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))).append("\n");
+        sb.append("redeem: ").append(REDEEM_URL).append("<CODE>\n");
+        appendGroup(sb, table, redeemed, "active?", "FRESH & READY TO CLAIM");
+        appendGroup(sb, table, redeemed, "", "MIGHT STILL WORK");
+        appendGroup(sb, table, redeemed, "mixed?", "expired?", "PROBABLY LET GO");
+        return sb.toString();
+    }
+
+    private static void appendGroup(StringBuilder sb, Scanner.ResultTable table, Set<String> redeemed,
+                                    String label, String title) {
+        appendGroup(sb, table, redeemed, label, title, null);
+    }
+
+    private static void appendGroup(StringBuilder sb, Scanner.ResultTable table, Set<String> redeemed,
+                                    String labelA, String labelB, String title) {
+        List<Scanner.Aggregated> in = new ArrayList<>();
+        for (Scanner.Aggregated a : table.codes()) {
+            if (a.label().equals(labelA)) {
+                in.add(a);
+            }
+        }
+        if (labelB != null) {
+            for (Scanner.Aggregated a : table.codes()) {
+                if (a.label().equals(labelB)) {
+                    in.add(a);
+                }
+            }
+        }
+        if (in.isEmpty()) {
+            return;
+        }
+        sb.append("\n").append(title).append("\n\n");
+        for (Scanner.Aggregated a : in) {
+            if (redeemed.contains(a.code())) {
+                sb.append("[redeemed] ");
+            }
+            sb.append(a.code()).append("  \u2014  ").append(a.sources()).append("\n");
+            String reward = Rewards.display(a.reward(), a.snippet());
+            if (reward != null) {
+                sb.append("  ").append(reward).append("\n");
+            }
+            sb.append("  ").append(REDEEM_URL).append(a.code()).append("\n");
+        }
+    }
+
+    private static void statusText(String text) {
+        JLabel s = STATUS;
+        if (s != null) {
+            s.setText(text);
+        }
     }
 
     private static final class BgPanel extends JPanel {
